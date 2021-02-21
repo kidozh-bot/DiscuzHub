@@ -22,6 +22,7 @@ import android.text.Spanned;
 import android.text.style.ClickableSpan;
 import android.text.style.ImageSpan;
 import android.text.style.StrikethroughSpan;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,7 +61,7 @@ import com.kidozh.discuzhub.utilities.ConstUtils;
 import com.kidozh.discuzhub.utilities.URLUtils;
 import com.kidozh.discuzhub.utilities.bbsLinkMovementMethod;
 import com.kidozh.discuzhub.utilities.NetworkUtils;
-import com.kidozh.discuzhub.utilities.timeDisplayUtils;
+import com.kidozh.discuzhub.utilities.TimeDisplayUtils;
 
 import org.xml.sax.XMLReader;
 
@@ -78,7 +79,7 @@ import java.util.regex.Pattern;
 
 import okhttp3.OkHttpClient;
 
-public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThreadCommentViewHolder> {
+public class PostAdapter extends RecyclerView.Adapter<PostAdapter.PostViewHolder> {
     private final static String TAG = PostAdapter.class.getSimpleName();
     private List<Post> postList = new ArrayList<>();
     private Context mContext,context;
@@ -142,7 +143,7 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThread
 
     @NonNull
     @Override
-    public PostAdapter.bbsForumThreadCommentViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+    public PostAdapter.PostViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         context = parent.getContext();
         int layoutIdForListItem = R.layout.item_post;
         LayoutInflater inflater = LayoutInflater.from(context);
@@ -154,11 +155,11 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThread
         }
 
         View view = inflater.inflate(layoutIdForListItem, parent, shouldAttachToParentImmediately);
-        return new bbsForumThreadCommentViewHolder(view);
+        return new PostViewHolder(view);
     }
 
     @Override
-    public void onBindViewHolder(@NonNull PostAdapter.bbsForumThreadCommentViewHolder holder, int position) {
+    public void onBindViewHolder(@NonNull PostAdapter.PostViewHolder holder, int position) {
         Post post = postList.get(position);
         if(post.author == null){
             return;
@@ -256,7 +257,13 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThread
             holder.mPostQuoteContent.setVisibility(View.GONE);
         }
         decodeString = quoteMatcherInVer4.replaceAll("");
-
+        // handle jammer contents
+        Log.d(TAG,"is removed contents "+UserPreferenceUtils.isJammerContentsRemoved(mContext));
+        if(UserPreferenceUtils.isJammerContentsRemoved(mContext)){
+            decodeString= decodeString.replaceAll("<font class=\"jammer\">.+</font>","");
+            decodeString= decodeString.replaceAll("<span style=\"display:none\">.+</span>","");
+            Log.d(TAG,"GET removed contents "+decodeString);
+        }
 
 
         HtmlTagHandler HtmlTagHandler = new HtmlTagHandler(mContext,holder.mContent);
@@ -287,10 +294,14 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThread
             }
         }));
 
+        // some discuz may return a null dbdateline fields
+        if(post.publishAt !=null){
+            holder.mPublishDate.setText(TimeDisplayUtils.getLocalePastTimeString(mContext, post.publishAt));
+        }
+        else{
+            holder.mPublishDate.setText(post.dateline);
+        }
 
-        //DateFormat df = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM, Locale.getDefault());
-        //holder.mPublishDate.setText(df.format(postInfo.publishAt));
-        holder.mPublishDate.setText(timeDisplayUtils.getLocalePastTimeString(mContext, post.publishAt));
 
         holder.mThreadType.setText(context.getString(R.string.post_index_number, post.position));
 
@@ -457,7 +468,7 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThread
 
     }
 
-    public class bbsForumThreadCommentViewHolder extends RecyclerView.ViewHolder{
+    public class PostViewHolder extends RecyclerView.ViewHolder{
         TextView mThreadPublisher;
         TextView mPublishDate;
         TextView mContent;
@@ -473,7 +484,7 @@ public class PostAdapter extends RecyclerView.Adapter<PostAdapter.bbsForumThread
         TextView isAuthorLabel;
         TextView mPostQuoteContent;
         ImageView mPostAdvanceOptionImageView;
-        public bbsForumThreadCommentViewHolder(@NonNull View itemView) {
+        public PostViewHolder(@NonNull View itemView) {
             super(itemView);
             mThreadPublisher = itemView.findViewById(R.id.bbs_post_publisher);
             mPublishDate = itemView.findViewById(R.id.bbs_post_publish_date);
