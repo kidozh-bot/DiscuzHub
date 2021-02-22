@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Discuz Hub</string>
+    <string name="app_name">QZZN</string>
     <string name="title_add_a_forum_by_url">根据网址添加一个论坛</string>
     <string name="action_settings">设置</string>
     <string name="add_a_forum_by_url_safe_client_check">使用安全的认证方式以保护HTTPS通信安全</string>
