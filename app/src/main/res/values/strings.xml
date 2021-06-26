@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">QZZN BBS</string>
+    <string name="app_name">MCBBS</string>
     <string name="action_settings">Settings</string>
     <string name="title_add_a_forum_by_url">Add a forum by URL</string>
     <string-array name="url_prefix">
