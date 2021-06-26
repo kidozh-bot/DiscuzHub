@@ -36,7 +36,7 @@ android {
                     discuz_base_url: "https://www.mcbbs.net",
             ]
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            applicationIdSuffix ".bbs"
+            applicationIdSuffix ".mcbbs"
         }
         qzzn {
             // an example for QZZN BBS
