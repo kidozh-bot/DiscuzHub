@@ -32,8 +32,8 @@ android {
         single {
             // fill your bbs id
             manifestPlaceholders = [
-                    discuz_title: "QZZN论坛",
-                    discuz_base_url: "https://bbs.qzzn.com",
+                    discuz_title: "MCBBS",
+                    discuz_base_url: "https://www.mcbbs.net",
             ]
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             applicationIdSuffix ".bbs"
