@@ -173,7 +173,21 @@ public interface DiscuzApiService {
             @Query("plid") int plid,
             @Query("pmid") int pmid,
             @Field("formhash") String formHash,
-            @Field("message") String message
+            @Field("message") String message,
+            @Field("touid") String toUid
+    );
+
+    @GET(DISCUZ_API_PATH+"?version=4&module=mythread")
+    Call<DisplayThreadsResult> myThreadResult(
+            @Query("page") int page
+    );
+
+    @FormUrlEncoded
+    @POST(DISCUZ_API_PATH+"?version=4&module=sendreply&action=reply&replysubmit=yes")
+    Call<ApiMessageActionResult> replyThread(
+            @Query("fid") int fid,
+            @Query("tid") int tid,
+            @FieldMap HashMap<String,String> options
     );
 
 

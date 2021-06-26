@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import com.kidozh.discuzhub.R
+import com.kidozh.discuzhub.activities.BaseStatusActivity
 import com.kidozh.discuzhub.daos.FavoriteThreadDao
 import com.kidozh.discuzhub.database.FavoriteThreadDatabase
 import com.kidozh.discuzhub.entities.*
@@ -17,11 +18,16 @@ import com.kidozh.discuzhub.utilities.NetworkUtils
 import com.kidozh.discuzhub.utilities.URLUtils
 import com.kidozh.discuzhub.utilities.UserPreferenceUtils
 import com.kidozh.discuzhub.utilities.bbsParseUtils.DetailedThreadInfo
+import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
+import java.net.URLEncoder
+import java.text.DateFormat
+import java.util.*
 import kotlin.collections.ArrayList
+import kotlin.collections.HashMap
 
 class ThreadViewModel(application: Application) : AndroidViewModel(application) {
     private val TAG = ThreadViewModel::class.java.simpleName
@@ -32,13 +38,12 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
     private var user: User? = null
     var networkStatus = MutableLiveData(ConstUtils.NETWORK_STATUS_SUCCESSFULLY)
     var notifyLoadAll = MutableLiveData(false)
-    var formHash: MutableLiveData<String>
+    var formHash: MutableLiveData<String> = MutableLiveData("")
     var errorText: MutableLiveData<String>
     var pollLiveData: MutableLiveData<Poll?>
     var bbsPersonInfoMutableLiveData: MutableLiveData<User>
-    var totalPostListLiveData: MutableLiveData<MutableList<Post>>
-    var newPostList: MutableLiveData<List<Post>> = MutableLiveData(ArrayList())
-    lateinit var threadStatusMutableLiveData: MutableLiveData<ViewThreadQueryStatus>
+    var totalPostListLiveData: MutableLiveData<List<Post>> = MutableLiveData(ArrayList())
+    val threadStatusMutableLiveData: MutableLiveData<ViewThreadQueryStatus> = MutableLiveData(ViewThreadQueryStatus(0,1))
     var detailedThreadInfoMutableLiveData: MutableLiveData<DetailedThreadInfo>
     var threadPostResultMutableLiveData: MutableLiveData<ThreadResult?> = MutableLiveData(null)
     var secureInfoResultMutableLiveData: MutableLiveData<SecureInfoResult?> = MutableLiveData(null)
@@ -50,7 +55,11 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
     var interactErrorMutableLiveData = MutableLiveData<ErrorMessage?>(null)
     var threadPriceInfoMutableLiveData = MutableLiveData<BuyThreadResult?>(null)
     var buyThreadResultMutableLiveData = MutableLiveData<BuyThreadResult?>(null)
+    var replyResultMutableLiveData = MutableLiveData<ApiMessageActionResult?>(null)
     var dao: FavoriteThreadDao
+
+    var replyPostMutableLiveData: MutableLiveData<Post?> = MutableLiveData<Post?>(null)
+
     fun setBBSInfo(bbsInfo: Discuz, user: User?, forum: Forum?, tid: Int) {
         this.bbsInfo = bbsInfo
         this.user = user
@@ -58,26 +67,19 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
         this.tid = tid
         URLUtils.setBBS(bbsInfo)
         client = NetworkUtils.getPreferredClientWithCookieJarByUser(getApplication(), user)
-        val viewThreadQueryStatus = ViewThreadQueryStatus(tid, 1)
-        threadStatusMutableLiveData.value = viewThreadQueryStatus
+
+        threadStatusMutableLiveData.postValue(ViewThreadQueryStatus(tid, 1))
+
         isFavoriteThreadMutableLiveData = dao.isFavoriteItem(bbsInfo.id, user?.getUid()
                 ?: 0, tid, "tid")
-        if(user == null){
-            favoriteThreadLiveData = dao.getFavoriteItemByTid(bbsInfo.id, 0, tid, "tid")
+        favoriteThreadLiveData = if(user == null){
+            dao.getFavoriteItemByTid(bbsInfo.id, 0, tid, "tid")
         }
         else{
-            favoriteThreadLiveData = dao.getFavoriteItemByTid(bbsInfo.id, user.getUid(), tid, "tid")
+            dao.getFavoriteItemByTid(bbsInfo.id, user.getUid(), tid, "tid")
         }
-
-
-
-        // bbsPersonInfoMutableLiveData.postValue(userBriefInfo);
     }
 
-
-//    fun getSecureInfo(): MutableLiveData<SecureInfoResult?> {
-//        return secureInfoResultMutableLiveData
-//    }
 
     val secureInfo: MutableLiveData<SecureInfoResult?>
         get() {
@@ -109,10 +111,11 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
         }
         networkStatus.postValue(ConstUtils.NETWORK_STATUS_LOADING)
         // bbsThreadStatus threadStatus = threadStatusMutableLiveData.getValue();
+        Log.d(TAG,"GET thread detail by status "+viewThreadQueryStatus.tid+" PAGE "+viewThreadQueryStatus.page)
         threadStatusMutableLiveData.postValue(viewThreadQueryStatus)
         if (viewThreadQueryStatus.page == 1) {
             // clear it first
-            totalPostListLiveData.value = ArrayList()
+            totalPostListLiveData.postValue(ArrayList())
         }
         val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo.base_url, client)
         val service = retrofit.create(DiscuzApiService::class.java)
@@ -121,82 +124,60 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
             override fun onResponse(call: Call<ThreadResult?>, response: Response<ThreadResult?>) {
                 if (response.isSuccessful && response.body() != null) {
                     var totalThreadSize = 0
-                    val threadResult = response.body()
+                    val threadResult = response.body() as ThreadResult
                     var detailedThreadInfo: DetailedThreadInfo? = null
                     threadPostResultMutableLiveData.postValue(threadResult)
-                    if (threadResult!!.threadPostVariables != null) {
-                        // update formhash first
-                        if (threadResult.threadPostVariables.formHash != null) {
-                            formHash.postValue(threadResult.threadPostVariables.formHash)
-                        }
-                        // update user
-                        if (threadResult.threadPostVariables != null) {
-                            bbsPersonInfoMutableLiveData.postValue(threadResult.threadPostVariables.userBriefInfo)
-                            // parse detailed info
-                            detailedThreadInfo = threadResult.threadPostVariables.detailedThreadInfo
-                            detailedThreadInfoMutableLiveData.postValue(threadResult.threadPostVariables.detailedThreadInfo)
-                            val pollInfo = threadResult.threadPostVariables.pollInfo
-                            if (pollLiveData.value == null && pollInfo != null) {
-                                pollLiveData.postValue(pollInfo)
-                            }
-                            val postInfoList = threadResult.threadPostVariables.postList
-                            // remove null object
-                            if (postInfoList.size != 0) {
-                                newPostList.postValue(postInfoList)
-                                if (viewThreadQueryStatus.page == 1) {
-                                    totalPostListLiveData.postValue(postInfoList)
-                                    totalThreadSize = postInfoList.size
-                                } else {
-                                    var currentThreadInfoList = totalPostListLiveData.value
-                                    if (currentThreadInfoList == null) {
-                                        currentThreadInfoList = ArrayList()
-                                    }
-                                    currentThreadInfoList.addAll(postInfoList)
-                                    totalPostListLiveData.postValue(currentThreadInfoList)
-                                    totalThreadSize = currentThreadInfoList.size
-                                }
-                            } else {
-                                if (viewThreadQueryStatus.page == 1 && threadResult.message != null) {
-                                    errorText.postValue(getApplication<Application>().getString(R.string.parse_failed))
-                                }
-                                networkStatus.postValue(ConstUtils.NETWORK_STATUS_LOADED_ALL)
-                                // rollback
-                                if (viewThreadQueryStatus.page != 1) {
-                                    viewThreadQueryStatus.page -= 1
-                                    Log.d(TAG, "Roll back page when page to " + viewThreadQueryStatus.page)
-                                    threadStatusMutableLiveData.postValue(viewThreadQueryStatus)
-                                }
-                            }
-                        }
-                        if (threadResult.message != null) {
-                            errorMessageMutableLiveData.postValue(threadResult.message!!.toErrorMessage())
-                            networkStatus.postValue(ConstUtils.NETWORK_STATUS_FAILED)
-                        }
+                    // update formhash first
+                    formHash.postValue(threadResult.threadPostVariables.formHash)
+                    // update user
+                    bbsPersonInfoMutableLiveData.postValue(threadResult.threadPostVariables.userBriefInfo)
+                    // parse detailed info
+                    detailedThreadInfo = threadResult.threadPostVariables.detailedThreadInfo
+                    detailedThreadInfoMutableLiveData.postValue(threadResult.threadPostVariables.detailedThreadInfo)
+                    val pollInfo = threadResult.threadPostVariables.pollInfo
+                    if (pollLiveData.value == null && pollInfo != null) {
+                        pollLiveData.postValue(pollInfo)
+                    }
+                    val postInfoList = threadResult.threadPostVariables.postList
+                    // remove null object
+                    if (postInfoList.isNotEmpty()) {
+                        val totalPosts = totalPostListLiveData.value as MutableList<Post>
+                        Log.d(TAG,"GET posts "+postInfoList.size+" total posts "+totalPosts.size)
+                        totalPosts.addAll(postInfoList.toList())
+                        // totalPostListLiveData.postValue(postInfoList)
+                        totalPostListLiveData.postValue(totalPosts.toList())
+                        totalThreadSize = totalPosts.size
 
-                        // load all?
-                        if (detailedThreadInfo != null) {
-                            val maxThreadNumber = detailedThreadInfo.replies
-                            val currentThreadList: List<Post>? = totalPostListLiveData.value
-                            var totalThreadCommentsNumber = 0
-                            if (currentThreadList != null) {
-                                totalThreadCommentsNumber = currentThreadList.size
-                            }
-                            Log.d(TAG, "PAGE " + viewThreadQueryStatus.page + " MAX POSITION " + maxThreadNumber + " CUR " + totalThreadCommentsNumber + " " + totalThreadSize)
-                            if (totalThreadSize >= maxThreadNumber + 1) {
-                                networkStatus.postValue(ConstUtils.NETWORK_STATUS_LOADED_ALL)
-                            } else {
-                                networkStatus.postValue(ConstUtils.NETWORK_STATUS_SUCCESSFULLY)
-                            }
-                        }
-
-                        // networkStatus.postValue(ConstUtils.NETWORK_STATUS_SUCCESSFULLY);
                     } else {
-                        errorMessageMutableLiveData.postValue(ErrorMessage(
-                                getApplication<Application>().getString(R.string.empty_result),
-                                getApplication<Application>().getString(R.string.discuz_network_result_null)
-                        ))
+                        if (viewThreadQueryStatus.page == 1 && threadResult.message != null) {
+                            errorText.postValue(getApplication<Application>().getString(R.string.parse_failed))
+                        }
+                        networkStatus.postValue(ConstUtils.NETWORK_STATUS_LOADED_ALL)
+                        // rollback
+                        if (viewThreadQueryStatus.page != 1) {
+                            viewThreadQueryStatus.page -= 1
+                            Log.d(TAG, "Roll back page when page to " + viewThreadQueryStatus.page)
+                            threadStatusMutableLiveData.postValue(viewThreadQueryStatus)
+                        }
+                    }
+                    if (threadResult.message != null) {
+                        errorMessageMutableLiveData.postValue(threadResult.message!!.toErrorMessage())
                         networkStatus.postValue(ConstUtils.NETWORK_STATUS_FAILED)
                     }
+
+                    // load all?
+                    val maxThreadNumber = detailedThreadInfo.replies
+                    val currentThreadList: List<Post> = totalPostListLiveData.value as List<Post>
+                    val totalThreadCommentsNumber = currentThreadList.size
+
+                    Log.d(TAG, "PAGE " + viewThreadQueryStatus.page + " MAX POSITION " + maxThreadNumber + " CUR " + totalThreadCommentsNumber + " " + totalThreadSize)
+                    if (totalThreadSize >= maxThreadNumber + 1) {
+                        networkStatus.postValue(ConstUtils.NETWORK_STATUS_LOADED_ALL)
+                    } else {
+                        networkStatus.postValue(ConstUtils.NETWORK_STATUS_SUCCESSFULLY)
+                    }
+
+                    // networkStatus.postValue(ConstUtils.NETWORK_STATUS_SUCCESSFULLY);
                 } else {
                     errorMessageMutableLiveData.postValue(ErrorMessage(response.code().toString(),
                             getApplication<Application>().getString(R.string.discuz_network_unsuccessful, response.message())))
@@ -227,8 +208,7 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
         if (TextUtils.isEmpty(formHashValue)) {
             return
         }
-        val recommendCall: Call<ApiMessageActionResult>
-        recommendCall = if (recommend) {
+        val recommendCall: Call<ApiMessageActionResult> = if (recommend) {
             service.recommendThread(formHashValue, tid)
         } else {
             service.unrecommendThread(formHashValue, tid)
@@ -255,7 +235,7 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun getThreadPriceInfo(tid: Int) {
-        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo!!.base_url, client!!)
+        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo.base_url, client)
         val service = retrofit.create(DiscuzApiService::class.java)
         val buyThreadResultCall = service.getThreadPriceInfo(tid)
         Log.d(TAG, "Send price information " + buyThreadResultCall.request().toString())
@@ -281,11 +261,10 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun reportPost(pid: Int, message: String?, isOtherReason: Boolean) {
-        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo!!.base_url, client!!)
+        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo.base_url, client)
         val service = retrofit.create(DiscuzApiService::class.java)
         val formHashValue = formHash.value
-        val reportPostCall: Call<ApiMessageActionResult>
-        reportPostCall = if (isOtherReason) {
+        val reportPostCall: Call<ApiMessageActionResult> = if (isOtherReason) {
             service.reportPost(formHashValue, pid, getApplication<Application>().getString(R.string.report_option_others), message)
         } else {
             service.reportPost(formHashValue, pid, message, message)
@@ -312,7 +291,7 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun buyThread(tid: Int) {
-        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo!!.base_url, client!!)
+        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo.base_url, client)
         val service = retrofit.create(DiscuzApiService::class.java)
         val formHashValue = formHash.value
         val buyThreadResultCall = service.buyThread(tid, formHashValue, "pay")
@@ -336,13 +315,13 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
         })
     }
 
-    public fun favoriteThread(favoriteThread: FavoriteThread, favorite: Boolean, description: String?){
+    fun favoriteThread(favoriteThread: FavoriteThread, favorite: Boolean, description: String?){
         var favoriteThreadActionResultCall: Call<ApiMessageActionResult>? = null
         val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo.base_url, client)
         val service = retrofit.create(DiscuzApiService::class.java)
         val result = threadPostResultMutableLiveData.value
-        var error = false
-        if (result != null && result.threadPostVariables != null
+
+        if (result?.threadPostVariables != null
                 && favoriteThread.userId != 0
                 && UserPreferenceUtils.syncInformation(getApplication())) {
             if (favorite) {
@@ -360,65 +339,189 @@ class ThreadViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         dao = FavoriteThreadDatabase.getInstance(getApplication()).dao
-        if(favoriteThreadActionResultCall != null){
-            favoriteThreadActionResultCall.enqueue(object :Callback<ApiMessageActionResult>{
-                override fun onResponse(call: Call<ApiMessageActionResult>, response: Response<ApiMessageActionResult>) {
-                    if (response.isSuccessful && response.body() != null) {
-                        val result = response.body()
-                        val key = result?.message?.key
+        favoriteThreadActionResultCall?.enqueue(object :Callback<ApiMessageActionResult>{
+            override fun onResponse(call: Call<ApiMessageActionResult>, response: Response<ApiMessageActionResult>) {
+                if (response.isSuccessful && response.body() != null) {
+                    val result = response.body() as ApiMessageActionResult
+                    val key = result.message?.key
+                    Thread{
+                        if (favorite && key == "favorite_do_success") {
+                            dao.insert(favoriteThread)
+                        } else if (!favorite && key == "do_success") {
+                            dao.delete(favoriteThread)
+                            dao.delete(bbsInfo.id, if (user != null) user!!.getUid() else 0, favoriteThread.idKey, "tid")
+                        }
+                    }.start()
+
+                } else {
+                    MessageResult().apply {
+                        content = getApplication<Application>().getString(R.string.network_failed)
+                        key = response.code().toString()
+                    }
+                    if(favorite){
                         Thread{
-                            if (favorite && key == "favorite_do_success") {
-                                dao.insert(favoriteThread)
-                            } else if (!favorite && key == "do_success") {
-                                dao.delete(favoriteThread)
-                                dao.delete(bbsInfo.id, if (user != null) user!!.getUid() else 0, favoriteThread.idKey, "tid")
-                            } else {
-                                error = true
-                            }
+                            dao.delete(bbsInfo.id, if (user != null) user!!.getUid() else 0, favoriteThread.idKey, "tid")
+                            dao.insert(favoriteThread)
+                        }.start()
+
+                    } else{
+                        // clear potential
+                        Thread{
+                            dao.delete(bbsInfo.id, if (user != null) user!!.getUid() else 0, favoriteThread.idKey, "tid")
                         }.start()
 
                     }
-                    else {
-                        val messageResult = MessageResult().apply {
-                            content = getApplication<Application>().getString(R.string.network_failed)
-                            key = response.code().toString()
-                        }
-                        if(favorite){
-                            Thread{
-                                dao.delete(bbsInfo.id, if (user != null) user!!.getUid() else 0, favoriteThread.idKey, "tid")
-                                dao.insert(favoriteThread)
-                            }.start()
-
-                        }
-                        else{
-                            // clear potential
-                                Thread{
-                                    dao.delete(bbsInfo!!.id, if (user != null) user!!.getUid() else 0, favoriteThread.idKey, "tid")
-                                }.start()
-
-                        }
-
-                    }
-
 
                 }
 
-                override fun onFailure(call: Call<ApiMessageActionResult>, t: Throwable) {
 
-                }
+            }
 
-            })
+            override fun onFailure(call: Call<ApiMessageActionResult>, t: Throwable) {
+
+            }
+
+        })
+
+    }
+
+    private fun needCaptcha(): Boolean {
+        return !(secureInfoResultMutableLiveData.value == null || secureInfoResultMutableLiveData.value!!.secureVariables == null)
+    }
+
+    fun sendReplyRequest(fid: Int,message: String, captcha: String){
+        Log.d(TAG, "Get message $message Captcha $captcha")
+        val replyPost : Post? = replyPostMutableLiveData.value
+        if(threadPostResultMutableLiveData.value == null){
+            return
         }
+        val result = threadPostResultMutableLiveData.value as ThreadResult
+        // preparing forum parameters
+        val formHash: String = result.threadPostVariables.formHash
+        val now = Date()
+        val formBody: HashMap<String,String> = HashMap<String,String>()
+        formBody["usesig"] = "1"
+        formBody["subject"] = ""
+        formBody["tid"] = tid.toString()
+        formBody["posttime"] = (now.time / 1000 - 1).toString()
+        formBody["formhash"] = formHash
+        // encoding the charset for discuz encoding
+        val charsetType = result.getCharsetType()
+        when (charsetType) {
+            BaseStatusActivity.CHARSET_GBK -> {
+                formBody["message"] = URLEncoder.encode(message, "GBK")
+
+            }
+            BaseStatusActivity.CHARSET_BIG5 -> {
+                formBody["message"] = URLEncoder.encode(message, "BIG5")
+            }
+            else -> {
+                formBody["message"] = message
+            }
+        }
+        // captcha verification
+        if (needCaptcha()) {
+            val secureInfoResult = secureInfoResultMutableLiveData.value as SecureInfoResult
+            formBody["seccodehash"] = secureInfoResult.secureVariables.secHash
+            if(replyPost==null){
+                // it's a post
+                formBody["seccodemodid"] = "forum::viewthread"
+            }
+            else{
+                formBody["seccodemodid"] = "forum::post"
+            }
+
+            Log.d(TAG,"Need captcha and the seccodeHash "+secureInfoResult.secureVariables.secHash)
+
+
+            when (charsetType) {
+                BaseStatusActivity.CHARSET_GBK -> {
+                    formBody["seccodeverify"] = URLEncoder.encode(captcha, "GBK")
+                }
+                BaseStatusActivity.CHARSET_BIG5 -> {
+                    formBody["seccodeverify"] = URLEncoder.encode(captcha, "BIG5")
+                }
+                else -> {
+                    formBody["seccodeverify"] = captcha
+                }
+            }
+        }
+        if(replyPost != null){
+            // reply to someone
+            formBody.put("handlekey", "reply")
+            formBody.put("reppid", replyPost.pid.toString())
+            formBody.put("reppost", replyPost.pid.toString())
+            val df = DateFormat.getDateTimeInstance(DateFormat.DEFAULT, DateFormat.FULL, Locale.getDefault())
+            val publishAtString = df.format(replyPost.publishAt)
+            val MAX_CHAR_LENGTH = 300
+            val trimEnd = MAX_CHAR_LENGTH.coerceAtMost(replyPost.message.length)
+            var replyMessage = replyPost.message.substring(0, trimEnd)
+            if (replyPost.message.length > MAX_CHAR_LENGTH) {
+                replyMessage += "..."
+            }
+            val noticeAuthorMsg = replyPost.message
+
+            val noticeMsgTrimString = getApplication<Application>().getString(R.string.bbs_reply_notice_author_string,
+                    URLUtils.getReplyPostURLInLabel(replyPost.pid, tid),
+                    replyPost.author,
+                    publishAtString,
+                    replyMessage
+            )
+            when (charsetType) {
+                BaseStatusActivity.CHARSET_GBK -> {
+                    formBody["message"] = URLEncoder.encode(message, "GBK")
+                    formBody["noticeauthormsg"] = URLEncoder.encode(noticeAuthorMsg, "GBK")
+                    formBody["noticetrimstr"] = URLEncoder.encode(noticeMsgTrimString, "GBK")
+
+                }
+                BaseStatusActivity.CHARSET_BIG5 -> {
+                    formBody["message"] = URLEncoder.encode(message, "BIG5")
+                    formBody["noticeauthormsg"] = URLEncoder.encode(noticeAuthorMsg, "BIG5")
+                    formBody["noticetrimstr"] = URLEncoder.encode(noticeMsgTrimString, "BIG5")
+                }
+                else -> {
+                    formBody["message"] = message
+                    formBody["noticeauthormsg"] = noticeAuthorMsg
+                    formBody["noticetrimstr"] = noticeMsgTrimString
+                }
+            }
+
+        }
+
+        // start to send information
+        val retrofit = NetworkUtils.getRetrofitInstance(bbsInfo.base_url, client)
+        val service = retrofit.create(DiscuzApiService::class.java)
+        val call = service.replyThread(fid,tid,formBody)
+        call.enqueue(object :Callback<ApiMessageActionResult>{
+            override fun onResponse(call: Call<ApiMessageActionResult>, response: Response<ApiMessageActionResult>) {
+                if(response.isSuccessful && response.body() != null){
+                    val result = response.body() as ApiMessageActionResult
+                    replyResultMutableLiveData.postValue(result)
+                }
+                else{
+                    interactErrorMutableLiveData.postValue(ErrorMessage(response.code().toString(),
+                            getApplication<Application>().getString(R.string.discuz_network_unsuccessful,
+                                    response.message()
+                            )
+                    ))
+                }
+            }
+
+            override fun onFailure(call: Call<ApiMessageActionResult>, t: Throwable) {
+                interactErrorMutableLiveData.postValue(ErrorMessage(getApplication<Application>().getString(R.string.discuz_network_failure_template),
+                        if (t.localizedMessage == null) t.toString() else t.localizedMessage))
+            }
+
+        })
+
+
 
     }
 
     init {
-        formHash = MutableLiveData("")
         bbsPersonInfoMutableLiveData = MutableLiveData()
         totalPostListLiveData = MutableLiveData()
-        newPostList = MutableLiveData(ArrayList())
         pollLiveData = MutableLiveData(null)
-        threadStatusMutableLiveData = MutableLiveData()
         errorText = MutableLiveData("")
         detailedThreadInfoMutableLiveData = MutableLiveData()
         threadPostResultMutableLiveData = MutableLiveData()

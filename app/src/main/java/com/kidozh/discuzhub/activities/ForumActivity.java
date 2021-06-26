@@ -22,6 +22,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.preference.PreferenceManager;
@@ -65,6 +66,7 @@ import com.kidozh.discuzhub.viewModels.ForumViewModel;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -83,6 +85,7 @@ public class ForumActivity extends BaseStatusActivity implements
 
     private ThreadAdapter adapter;
     private SubForumAdapter subForumAdapter;
+    private User user;
 
     String fid;
 
@@ -118,6 +121,8 @@ public class ForumActivity extends BaseStatusActivity implements
         configureSwipeRefreshLayout();
         setForumRuleCollapseListener();
         configurePostThreadBtn();
+        //  start to get the first page info
+        forumViewModel.getNextThreadList();
 
 
     }
@@ -137,35 +142,25 @@ public class ForumActivity extends BaseStatusActivity implements
 
 
     private void bindViewModel(){
+        forumViewModel.totalThreadListMutableLiveData.observe(this, it->{
+            Map<String,String> threadTypeMap = null;
+            if(forumViewModel.displayForumResultMutableLiveData.getValue()!=null &&
+                    forumViewModel.displayForumResultMutableLiveData.getValue().forumVariables.getThreadTypeInfo()!=null){
+                threadTypeMap = forumViewModel.displayForumResultMutableLiveData.getValue().forumVariables.getThreadTypeInfo().idNameMap;
+            }
 
-        forumViewModel.getNewThreadListMutableLiveData().observe(this, new Observer<List<Thread>>() {
-            @Override
-            public void onChanged(@NonNull List<Thread> threads) {
-                Map<String,String> threadTypeMap = null;
-                if(forumViewModel.displayForumResultMutableLiveData.getValue()!=null &&
-                        forumViewModel.displayForumResultMutableLiveData.getValue().forumVariables.threadTypeInfo !=null){
-                    threadTypeMap = forumViewModel.displayForumResultMutableLiveData.getValue().forumVariables.threadTypeInfo.idNameMap;
-
-                }
-                DisplayForumQueryStatus queryStatus = forumViewModel.forumStatusMutableLiveData.getValue();
-                Log.d(TAG,"forum page "+queryStatus.page+" "+ threads.size());
-                if(queryStatus.page == 1 && threads.size() == 0){
-                    adapter.clearList();
-                    return;
-                }
-                if((queryStatus.page == 2 || queryStatus.page == 1) && adapter.threadList.size() != 0){
-                    // need to clear the cache
-                    adapter.clearList();
-
-                }
-
-                adapter.addThreadInfoList(threads,threadTypeMap);
-                if(queryStatus.page == 2 ){
+            adapter.updateListAndType(it, threadTypeMap);
+            if(forumViewModel.forumStatusMutableLiveData.getValue()!= null){
+                int page = forumViewModel.forumStatusMutableLiveData.getValue().page;
+                // point to the next page
+                if(page == 2){
                     binding.bbsForumThreadRecyclerview.smoothScrollToPosition(0);
                 }
-
             }
+
         });
+
+
 
         forumViewModel.networkState.observe(this, integer -> {
             Log.d(TAG,"Network state changed "+integer);
@@ -224,26 +219,40 @@ public class ForumActivity extends BaseStatusActivity implements
                         
                         Forum forum = forumResult.forumVariables.forum;
                         ForumActivity.this.forum = forum;
-                        if(getSupportActionBar()!=null){
-                            getSupportActionBar().setTitle(forum.name);
-                            getSupportActionBar().setSubtitle(forum.description);
+                        binding.toolbarTitle.setText(forum.name);
+                        if(forum.description.isEmpty()){
+                            binding.toolbarSubtitle.setVisibility(View.GONE);
                         }
+                        else{
+                            binding.toolbarSubtitle.setVisibility(View.VISIBLE);
+                            binding.toolbarSubtitle.setText(forum.description);
+                        }
+
+
                     }
                 }
             }
 
         });
 
-        forumViewModel.forumDetailedInfoMutableLiveData.observe(this, new Observer<Forum>() {
-            @Override
-            public void onChanged(Forum forum) {
-                // for rules
+
+        forumViewModel.favoriteForumLiveData.observe(this, favoriteForum -> {
+            Log.d(TAG,"Detecting change favorite forum "+favoriteForum);
+            if(favoriteForum!=null){
+                Log.d(TAG,"favorite forum id "+favoriteForum.id);
+            }
+            invalidateOptionsMenu();
+        });
+
+        forumViewModel.displayForumResultMutableLiveData.observe(this, result ->{
+            if(result!=null){
+                Forum forum = result.forumVariables.forum;
                 if(!hasLoadOnce){
                     recordViewHistory(forum);
                     hasLoadOnce = true;
                 }
 
-                if(! binding.bbsForumRuleTextview.getText().equals(forum.rules)){
+                if(!binding.bbsForumRuleTextview.getText().equals(forum.rules)){
                     String s = forum.rules;
                     if(s!=null && s.length() !=0){
                         GlideImageGetter glideImageGetter  = new GlideImageGetter(binding.bbsForumRuleTextview, user);
@@ -281,14 +290,6 @@ public class ForumActivity extends BaseStatusActivity implements
                 }
 
             }
-        });
-
-        forumViewModel.favoriteForumLiveData.observe(this, favoriteForum -> {
-            Log.d(TAG,"Detecting change favorite forum "+favoriteForum);
-            if(favoriteForum!=null){
-                Log.d(TAG,"favorite forum id "+favoriteForum.id);
-            }
-            invalidateOptionsMenu();
         });
 
 
@@ -383,9 +384,9 @@ public class ForumActivity extends BaseStatusActivity implements
                         intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user);
                         intent.putExtra(ConstUtils.PASS_POST_TYPE, ConstUtils.TYPE_POST_THREAD);
                         if(forumViewModel.displayForumResultMutableLiveData
-                                .getValue().forumVariables.threadTypeInfo != null){
+                                .getValue().forumVariables.getThreadTypeInfo() != null){
                             intent.putExtra(ConstUtils.PASS_THREAD_CATEGORY_KEY, (Serializable) forumViewModel.displayForumResultMutableLiveData
-                                    .getValue().forumVariables.threadTypeInfo.idNameMap);
+                                    .getValue().forumVariables.getThreadTypeInfo().idNameMap);
                         }
 
 
@@ -417,13 +418,12 @@ public class ForumActivity extends BaseStatusActivity implements
         setSupportActionBar(binding.toolbar);
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         getSupportActionBar().setDisplayShowTitleEnabled(true);
-        getSupportActionBar().setTitle(bbsInfo.site_name);
+
+        binding.toolbarTitle.setText(bbsInfo.site_name);
         if(forum.name !=null){
-            getSupportActionBar().setSubtitle(forum.name);
+            binding.toolbarTitle.setText(forum.name);
+            //getSupportActionBar().setSubtitle(forum.name);
         }
-
-
-
     }
 
 
@@ -448,9 +448,8 @@ public class ForumActivity extends BaseStatusActivity implements
         LinearLayoutManager linearLayoutManager = new LinearLayoutManager(this);
 
         binding.bbsForumThreadRecyclerview.setLayoutManager(linearLayoutManager);
-        //binding.bbsForumThreadRecyclerview.addItemDecoration(new DividerItemDecoration(this,DividerItemDecoration.VERTICAL));
 
-        adapter = new ThreadAdapter(null,fid,bbsInfo, user);
+        adapter = new ThreadAdapter(null,bbsInfo, user);
         concatAdapter = new ConcatAdapter(adapter,networkIndicatorAdapter);
         binding.bbsForumThreadRecyclerview.setAdapter(AnimationUtils.INSTANCE.getAnimatedAdapter(this,concatAdapter));
 
@@ -478,8 +477,6 @@ public class ForumActivity extends BaseStatusActivity implements
                             if(status!=null){
                                 forumViewModel.setForumStatusAndFetchThread(status);
                             }
-
-
                         }
                     }
 
@@ -687,11 +684,11 @@ public class ForumActivity extends BaseStatusActivity implements
         boolean isFavorite = favoriteForum != null;
         Log.d(TAG,"Triggering favorite status "+isFavorite+" "+favoriteForum);
         if(!isFavorite){
-            menu.findItem(R.id.bbs_favorite).setIcon(getDrawable(R.drawable.ic_not_favorite_24px));
+            menu.findItem(R.id.bbs_favorite).setIcon(ContextCompat.getDrawable(this,R.drawable.ic_not_favorite_24px));
             menu.findItem(R.id.bbs_favorite).setTitle(R.string.favorite);
         }
         else {
-            menu.findItem(R.id.bbs_favorite).setIcon(getDrawable(R.drawable.ic_favorite_24px));
+            menu.findItem(R.id.bbs_favorite).setIcon(ContextCompat.getDrawable(this,R.drawable.ic_favorite_24px));
             menu.findItem(R.id.bbs_favorite).setTitle(R.string.unfavorite);
         }
         return super.onPrepareOptionsMenu(menu);

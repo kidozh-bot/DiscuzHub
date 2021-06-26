@@ -15,11 +15,23 @@
                 android:id="@+id/toolbar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="?attr/actionBarSize"
                 android:theme="?attr/actionBarTheme"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toTopOf="parent" />
+                app:layout_constraintTop_toTopOf="parent">
+
+                <TextView
+                    android:id="@+id/toolbar_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textAlignment="center"
+                    android:textAppearance="@style/TextAppearance.AppCompat.Large"
+                    tools:layout_editor_absoluteX="16dp"
+                    tools:layout_editor_absoluteY="18dp"
+                    tools:text="@tools:sample/full_names" />
+            </androidx.appcompat.widget.Toolbar>
+
+
 
             <ProgressBar
                 android:id="@+id/login_bbs_progressBar"
@@ -101,6 +113,7 @@
                     android:id="@+id/login_bbs_account_textInputEditText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:autofillHints="username"
                     android:fontFamily="@font/pt_sans" />
             </com.google.android.material.textfield.TextInputLayout>
 
@@ -121,6 +134,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:fontFamily="@font/pt_sans"
+                    android:autofillHints="password"
                     android:hint="@string/bbs_password"
                     android:inputType="textPassword" />
             </com.google.android.material.textfield.TextInputLayout>

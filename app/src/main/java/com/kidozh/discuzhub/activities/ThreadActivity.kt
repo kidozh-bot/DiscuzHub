@@ -60,12 +60,14 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.text.TextUtils
 import androidx.core.content.ContextCompat
-import android.preference.PreferenceManager
+import androidx.preference.PreferenceManager
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.inputmethod.InputMethodManager
+import androidx.annotation.RequiresApi
+import androidx.core.text.HtmlCompat
 import androidx.fragment.app.FragmentStatePagerAdapter
 import androidx.lifecycle.Observer
 import com.google.android.material.chip.Chip
@@ -103,9 +105,9 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
     private var smileyPicker: SmileyPicker? = null
     private var handler: EmotionInputHandler? = null
     lateinit var threadDetailViewModel: ThreadViewModel
-    lateinit var smileyViewModel: SmileyViewModel
-    private var concatAdapter: ConcatAdapter? = null
-    val networkIndicatorAdapter = NetworkIndicatorAdapter()
+    private lateinit var smileyViewModel: SmileyViewModel
+    private lateinit var concatAdapter: ConcatAdapter
+    private val networkIndicatorAdapter = NetworkIndicatorAdapter()
     lateinit var smileyViewPagerAdapter: SmileyViewPagerAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,8 +144,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         URLUtils.setBBS(discuz)
         threadDetailViewModel.setBBSInfo(discuz, user, forum, tid)
         smileyViewModel.configureDiscuz(discuz, user)
-        if (thread != null && thread!!.subject != null) {
-            val sp = Html.fromHtml(thread!!.subject)
+        if (thread != null) {
+            val sp = Html.fromHtml(thread!!.subject, HtmlCompat.FROM_HTML_MODE_LEGACY)
             val spannableString = SpannableString(sp)
             binding.bbsThreadSubject.setText(spannableString, TextView.BufferType.SPANNABLE)
         }
@@ -164,7 +166,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
 
 
     private fun configureSmileyLayout() {
-        handler = EmotionInputHandler(binding.bbsThreadDetailCommentEditText) { enable: Boolean, s: String? -> }
+        handler = EmotionInputHandler(binding.bbsThreadDetailCommentEditText) { _: Boolean, _: String? -> }
         smileyPicker = SmileyPicker(this, discuz)
         smileyPicker!!.setListener { str: String?, a: Drawable? -> handler!!.insertSmiley(str, a) }
 
@@ -172,9 +174,9 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         binding.bbsCommentSmileyViewPager.adapter = smileyViewPagerAdapter
     }
 
-    fun configureChipGroup(){
+    private fun configureChipGroup(){
         binding.threadProperty.setOnCheckedChangeListener { _, checkedId ->
-            Log.d(TAG,"GET clicked id "+checkedId)
+            Log.d(TAG, "GET clicked id $checkedId")
             if(checkedId == R.drawable.ic_price_outlined_24px){
                 Toasty.info(this, getString(R.string.buy_thread_loading), Toast.LENGTH_SHORT).show()
                 threadDetailViewModel.getThreadPriceInfo(tid)
@@ -182,7 +184,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         }
     }
 
-    fun getPropertyChip(res: Int, string: String, iconColor: Int ): Chip{
+    private fun getPropertyChip(res: Int, string: String, iconColor: Int ): Chip{
 
         return Chip(this).apply {
             text = string
@@ -192,38 +194,40 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         }
     }
 
+
     private fun bindViewModel() {
         // for personal info
         threadDetailViewModel.bbsPersonInfoMutableLiveData.observe(this, { userBriefInfo ->
-            Log.d(TAG, "User info $userBriefInfo")
-            if (userBriefInfo == null || userBriefInfo.auth == null) {
+            if (userBriefInfo?.auth == null) {
                 binding.bbsCommentConstraintLayout.visibility = View.GONE
             } else {
                 binding.bbsCommentConstraintLayout.visibility = View.VISIBLE
             }
         })
-        threadDetailViewModel.newPostList.observe(this, { posts: List<Post> ->
+
+        threadDetailViewModel.totalPostListLiveData.observe(this,{
+            Log.d(TAG, "Update list "+postAdapter.itemCount+" new list "+it.size+" is equal "+(postAdapter.getPosts() == it).toString())
             var authorid = 0
             val threadResult = threadDetailViewModel.threadPostResultMutableLiveData.value
-            val viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value
-            if (threadResult?.threadPostVariables != null && threadResult.threadPostVariables.detailedThreadInfo != null) {
+            val viewThreadQueryStatus : ViewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value as ViewThreadQueryStatus
+            if (threadResult?.threadPostVariables != null) {
                 authorid = threadResult.threadPostVariables.detailedThreadInfo.authorId
             }
-            Log.d(TAG, "queried page " + viewThreadQueryStatus!!.page)
-            if (viewThreadQueryStatus.page == 1) {
-                postAdapter.clearList()
-                postAdapter.addThreadInfoList(posts, threadDetailViewModel.threadStatusMutableLiveData.value, authorid)
+            // update list
+            postAdapter.setPosts(it as MutableList<Post>,viewThreadQueryStatus,authorid)
+
+            if(viewThreadQueryStatus.page == 1){
                 binding.postsRecyclerview.scrollToPosition(0)
-            } else {
-                postAdapter.addThreadInfoList(posts, threadDetailViewModel.threadStatusMutableLiveData.value, authorid)
             }
         })
+
+
         threadDetailViewModel.networkStatus.observe(this, { integer: Int ->
             Log.d(TAG, "network changed $integer")
             when (integer) {
                 ConstUtils.NETWORK_STATUS_LOADING -> {
                     binding.bbsThreadDetailSwipeRefreshLayout.isRefreshing = true
-                    networkIndicatorAdapter!!.setLoadingStatus()
+                    networkIndicatorAdapter.setLoadingStatus()
                 }
                 ConstUtils.NETWORK_STATUS_LOADED_ALL -> {
                     binding.bbsThreadDetailSwipeRefreshLayout.isRefreshing = false
@@ -244,9 +248,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                 Toasty.error(application,
                         getString(R.string.discuz_api_message_template, errorMessage.key, errorMessage.content),
                         Toast.LENGTH_LONG).show()
-                networkIndicatorAdapter.setErrorStatus(ErrorMessage(
-                        errorMessage.key, errorMessage.content, R.drawable.ic_error_outline_24px
-                ))
+                networkIndicatorAdapter.setErrorStatus(errorMessage)
                 VibrateUtils.vibrateForError(application)
             }
         })
@@ -265,13 +267,15 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         threadDetailViewModel.formHash.observe(this, { s -> formHash = s })
         threadDetailViewModel.threadStatusMutableLiveData.observe(this, { viewThreadQueryStatus ->
             Log.d(TAG, "Livedata changed " + viewThreadQueryStatus.datelineAscend)
-            if (supportActionBar != null) {
-                if (viewThreadQueryStatus.datelineAscend) {
-                    supportActionBar!!.setSubtitle(getString(R.string.bbs_thread_status_ascend))
-                } else {
-                    supportActionBar!!.setSubtitle(getString(R.string.bbs_thread_status_descend))
-                }
-            }
+//            if (supportActionBar != null) {
+//                if (viewThreadQueryStatus.datelineAscend) {
+//                    binding.toolbarSubtitle.setText(getString(R.string.bbs_thread_status_ascend))
+//
+//                } else {
+//                    binding.toolbarSubtitle.setText(getString(R.string.bbs_thread_status_descend))
+//
+//                }
+//            }
         })
         threadDetailViewModel.detailedThreadInfoMutableLiveData.observe(this, { detailedThreadInfo -> // closed situation
             // prepare notification list
@@ -450,17 +454,23 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
             binding.bbsThreadCommentNumber.text = getString(R.string.bbs_thread_reply_number, detailedThreadInfo.replies)
             binding.bbsThreadViewNumber.text = detailedThreadInfo.views.toString()
         })
+
         threadDetailViewModel.threadPostResultMutableLiveData.observe(this, { threadResult ->
             if (threadResult != null) {
-                if (threadResult.threadPostVariables != null && threadResult.threadPostVariables.detailedThreadInfo != null && threadResult.threadPostVariables.detailedThreadInfo.subject != null) {
-                    val sp = Html.fromHtml(threadResult.threadPostVariables.detailedThreadInfo.subject)
+                if (threadResult.threadPostVariables.detailedThreadInfo.subject != null) {
+                    val sp = Html.fromHtml(threadResult.threadPostVariables.detailedThreadInfo.subject,HtmlCompat.FROM_HTML_MODE_COMPACT)
                     val spannableString = SpannableString(sp)
                     binding.bbsThreadSubject.setText(spannableString, TextView.BufferType.SPANNABLE)
-                    if (supportActionBar != null) {
-                        supportActionBar!!.setTitle(threadResult.threadPostVariables.detailedThreadInfo.subject)
-                    }
+//                    if (supportActionBar != null) {
+//                        supportActionBar!!.setTitle(threadResult.threadPostVariables.detailedThreadInfo.subject)
+//                    }
+                    // binding.toolbarTitle.text = threadResult.threadPostVariables.detailedThreadInfo.subject
+                    // check with comments
+
+                    postAdapter.mergeCommentMap(threadResult.threadPostVariables.commentList)
+
                     val detailedThreadInfo = threadResult.threadPostVariables.detailedThreadInfo
-                    if (detailedThreadInfo != null && hasLoadOnce == false) {
+                    if (!hasLoadOnce) {
                         hasLoadOnce = true
                         val prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
                         val recordHistory = prefs.getBoolean(getString(R.string.preference_key_record_history), false)
@@ -481,11 +491,12 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
 
                 //Log.d(TAG,"Thread post result error "+ threadResult.isError()+" "+ threadResult.threadPostVariables.message);
                 val rewriteRule = threadResult.threadPostVariables.rewriteRule
-                if (rewriteRule != null) {
+                if(rewriteRule != null){
                     getAndSaveRewriteRule(rewriteRule, UserPreferenceUtils.REWRITE_FORM_DISPLAY_KEY)
                     getAndSaveRewriteRule(rewriteRule, UserPreferenceUtils.REWRITE_VIEW_THREAD_KEY)
                     getAndSaveRewriteRule(rewriteRule, UserPreferenceUtils.REWRITE_HOME_SPACE)
                 }
+
             }
         })
 
@@ -496,7 +507,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                     // don't need a code
                     binding.bbsPostCaptchaEditText.visibility = View.GONE
                     binding.bbsPostCaptchaImageview.visibility = View.GONE
-                } else {
+                }
+                else {
                     binding.bbsPostCaptchaEditText.visibility = View.VISIBLE
                     binding.bbsPostCaptchaImageview.visibility = View.VISIBLE
                     binding.bbsPostCaptchaImageview.setImageDrawable(ContextCompat.getDrawable(this,R.drawable.ic_captcha_placeholder_24px))
@@ -690,7 +702,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         binding.bbsThreadDetailCommentButton.setOnClickListener(View.OnClickListener {
             val commentMessage = binding.bbsThreadDetailCommentEditText.text.toString()
             val captchaString = binding.bbsPostCaptchaEditText.text.toString()
-            if (needCaptcha() && captchaString.length == 0) {
+            if (needCaptcha() && captchaString.isEmpty()) {
                 Toasty.warning(applicationContext, getString(R.string.captcha_required), Toast.LENGTH_SHORT).show()
                 return@OnClickListener
             }
@@ -711,7 +723,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         binding.bbsThreadDetailEmoijButton.setOnClickListener {
             if (binding.smileyRootLayout.visibility == View.GONE) {
                 // smiley picker not visible
-                binding.bbsThreadDetailEmoijButton.setImageDrawable(getDrawable(R.drawable.vector_drawable_keyboard_24px))
+                binding.bbsThreadDetailEmoijButton.setImageDrawable(ContextCompat.getDrawable(context,R.drawable.vector_drawable_keyboard_24px))
                 binding.bbsThreadDetailCommentEditText.clearFocus()
                 // close keyboard
                 val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
@@ -722,13 +734,13 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                 smileyViewModel.getSmileyList()
             } else {
                 binding.smileyRootLayout.visibility = View.GONE
-                binding.bbsThreadDetailEmoijButton.setImageDrawable(getDrawable(R.drawable.ic_edit_emoticon_24dp))
+                binding.bbsThreadDetailEmoijButton.setImageDrawable(ContextCompat.getDrawable(context,R.drawable.ic_edit_emoticon_24dp))
             }
         }
         binding.bbsThreadDetailCommentEditText.onFocusChangeListener = OnFocusChangeListener { v, hasFocus ->
             if (hasFocus && binding.smileyRootLayout.visibility == View.VISIBLE) {
                 binding.smileyRootLayout.visibility = View.GONE
-                binding.bbsThreadDetailEmoijButton.setImageDrawable(getDrawable(R.drawable.ic_edit_emoticon_24dp))
+                binding.bbsThreadDetailEmoijButton.setImageDrawable(ContextCompat.getDrawable(context,R.drawable.ic_edit_emoticon_24dp))
             }
         }
     }
@@ -743,8 +755,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         Log.d(TAG, "Press string $decodeStr")
     }
 
-    override fun replyToSomeOne(position: Int) {
-        val threadCommentInfo = postAdapter!!.threadInfoList[position]
+    override fun replyToSomeOne(post: Post) {
+        val threadCommentInfo = post
         selectedThreadComment = threadCommentInfo
         binding.bbsThreadDetailReplyChip.text = threadCommentInfo.author
         binding.bbsThreadDetailReplyChip.visibility = View.VISIBLE
@@ -757,7 +769,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         val quotePatternInVer4 = Pattern.compile(quoteRegexInVer4, Pattern.DOTALL)
         val quoteMatcherInVer4 = quotePatternInVer4.matcher(decodeString)
         decodeString = quoteMatcherInVer4.replaceAll("")
-        val sp = Html.fromHtml(decodeString)
+        val sp = Html.fromHtml(decodeString,HtmlCompat.FROM_HTML_MODE_LEGACY)
         binding.bbsThreadDetailReplyContent.setText(sp, TextView.BufferType.SPANNABLE)
         binding.bbsThreadDetailReplyContent.visibility = View.VISIBLE
         binding.bbsThreadDetailReplyChip.setOnCloseIconClickListener {
@@ -778,8 +790,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
     }
 
     override fun setAuthorId(authorId: Int) {
-        val viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value
-        viewThreadQueryStatus?.setInitAuthorId(authorId)
+        val viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value as ViewThreadQueryStatus
+        viewThreadQueryStatus.setInitAuthorId(authorId)
         reloadThePage(viewThreadQueryStatus)
 
         // refresh it
@@ -816,20 +828,18 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                     return
                 } else {
                     // scroll it
-                    val postInfos = postAdapter!!.threadInfoList
-                    if (postInfos != null) {
-                        for (i in postInfos.indices) {
-                            val curPost = postInfos[i]
-                            if (curPost.pid == redirectPid) {
-                                binding.postsRecyclerview.smoothScrollToPosition(i)
-                                VibrateUtils.vibrateForClick(this)
-                                val postPostion = postInfos[i].position
-                                Toasty.success(this, getString(R.string.scroll_to_pid_successfully, postPostion), Toast.LENGTH_SHORT).show()
-                                return
-                            }
+                    val postInfos = postAdapter.getPosts()
+                    for (i in postInfos.indices) {
+                        val curPost = postInfos[i]
+                        if (curPost.pid == redirectPid) {
+                            binding.postsRecyclerview.smoothScrollToPosition(i)
+                            VibrateUtils.vibrateForClick(this)
+                            val postPostion = postInfos[i].position
+                            Toasty.success(this, getString(R.string.scroll_to_pid_successfully, postPostion), Toast.LENGTH_SHORT).show()
+                            return
                         }
-                        Toasty.info(this, getString(R.string.scroll_to_pid_failed, pidString), Toast.LENGTH_SHORT).show()
                     }
+                    Toasty.info(this, getString(R.string.scroll_to_pid_failed, pidString), Toast.LENGTH_SHORT).show()
                 }
             } else if (uri.getQueryParameter("mod") != null && uri.getQueryParameter("mod") == "viewthread" && uri.getQueryParameter("tid") != null) {
                 val tidString = uri.getQueryParameter("tid")
@@ -913,22 +923,22 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
         if (clickedUri.host == null || clickedUri.host == baseUri.host) {
             // internal link
             val result = threadDetailViewModel.threadPostResultMutableLiveData.value
-            if (result != null && result.threadPostVariables != null) {
-                if (result.threadPostVariables.rewriteRule != null) {
-                    val rewriteRules = result.threadPostVariables.rewriteRule
-                    var clickedURLPath = clickedUri.path
-                    if (clickedURLPath == null) {
-                        parseURLAndOpen(unescapedURL)
+            if (result != null) {
+                val rewriteRules = result.threadPostVariables.rewriteRule
+                var clickedURLPath = clickedUri.path
+                if (clickedURLPath == null) {
+                    parseURLAndOpen(unescapedURL)
+                }
+                val basedURLPath = baseUri.path
+                if (clickedURLPath != null && basedURLPath != null) {
+                    if (clickedURLPath.matches(Regex("^$basedURLPath.*"))) {
+                        clickedURLPath = clickedURLPath.substring(basedURLPath.length)
                     }
-                    val basedURLPath = baseUri.path
-                    if (clickedURLPath != null && basedURLPath != null) {
-                        if (clickedURLPath.matches(Regex("^$basedURLPath.*"))) {
-                            clickedURLPath = clickedURLPath.substring(basedURLPath.length)
-                        }
-                    }
-                    // only catch two type : forum_forumdisplay & forum_viewthread
-                    // only 8.0+ support reverse copy
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                }
+                // only catch two type : forum_forumdisplay & forum_viewthread
+                // only 8.0+ support reverse copy
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    if (rewriteRules != null) {
                         if (rewriteRules.containsKey("forum_forumdisplay")) {
                             var rewriteRule = rewriteRules["forum_forumdisplay"]
                             UserPreferenceUtils.saveRewriteRule(context, discuz, UserPreferenceUtils.REWRITE_FORM_DISPLAY_KEY, rewriteRule)
@@ -954,7 +964,7 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                                         0
                                     }
 
-//                                    int page = Integer.parseInt(pageStr);
+            //                                    int page = Integer.parseInt(pageStr);
                                     val intent = Intent(context, ForumActivity::class.java)
                                     val clickedForum = Forum()
                                     clickedForum.fid = fid
@@ -968,6 +978,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                                 }
                             }
                         }
+                    }
+                    if (rewriteRules != null) {
                         if (rewriteRules.containsKey("forum_viewthread")) {
                             // match template such as t{tid}-{page}-{prevpage}
                             var rewriteRule = rewriteRules["forum_viewthread"]
@@ -1011,6 +1023,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                                 }
                             }
                         }
+                    }
+                    if (rewriteRules != null) {
                         if (rewriteRules.containsKey("home_space")) {
                             // match template such as t{tid}-{page}-{prevpage}
                             var rewriteRule = rewriteRules["home_space"]
@@ -1049,10 +1063,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
                                 }
                             }
                         }
-                        parseURLAndOpen(unescapedURL)
-                    } else {
-                        parseURLAndOpen(unescapedURL)
                     }
+                    parseURLAndOpen(unescapedURL)
                 } else {
                     parseURLAndOpen(unescapedURL)
                 }
@@ -1130,19 +1142,17 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
 
 
     private fun configureRecyclerview() {
-
-
         //binding.postsRecyclerview.setHasFixedSize(true);
         val linearLayoutManager = LinearLayoutManager(this)
         binding.postsRecyclerview.layoutManager = linearLayoutManager
         binding.postsRecyclerview.itemAnimator = getRecyclerviewAnimation(this)
-        postAdapter = PostAdapter(this,
-                discuz,
-                user,
-                threadDetailViewModel.threadStatusMutableLiveData.value)
-        postAdapter!!.subject = subject
+        val status = threadDetailViewModel.threadStatusMutableLiveData.value as ViewThreadQueryStatus
+
+        postAdapter = PostAdapter(discuz,user,status)
+
         concatAdapter = ConcatAdapter(postAdapter, networkIndicatorAdapter)
-        binding.postsRecyclerview.adapter = getAnimatedAdapter(this, concatAdapter!!)
+        binding.postsRecyclerview.adapter = getAnimatedAdapter(this, concatAdapter)
+
         binding.postsRecyclerview.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                 super.onScrollStateChanged(recyclerView, newState)
@@ -1284,20 +1294,22 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
     }
 
     private fun reloadThePage() {
-        val viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value
-        viewThreadQueryStatus?.setInitPage(1)
+        val viewThreadQueryStatus : ViewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value as ViewThreadQueryStatus
+        viewThreadQueryStatus.setInitPage(1)
         Log.d(TAG, "Set status when reload page")
-        threadDetailViewModel.threadStatusMutableLiveData.value = viewThreadQueryStatus
+        threadDetailViewModel.threadStatusMutableLiveData.postValue(viewThreadQueryStatus)
         threadDetailViewModel.notifyLoadAll.value = false
         notifyLoadAll = false
+        postAdapter.clearList()
     }
 
-    private fun reloadThePage(viewThreadQueryStatus: ViewThreadQueryStatus?) {
-        viewThreadQueryStatus?.setInitPage(1)
+    private fun reloadThePage(viewThreadQueryStatus: ViewThreadQueryStatus) {
+        viewThreadQueryStatus.setInitPage(1)
         Log.d(TAG, "Set status when init data $viewThreadQueryStatus")
         threadDetailViewModel.threadStatusMutableLiveData.value = viewThreadQueryStatus
         threadDetailViewModel.notifyLoadAll.value = false
         notifyLoadAll = false
+        postAdapter.clearList()
     }
 
     private fun postReplyToSomeoneInThread(replyPid: Int, message: String, noticeAuthorMsg: String) {
@@ -1420,7 +1432,8 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
     private fun configureToolbar() {
         setSupportActionBar(binding.toolbar)
         supportActionBar!!.setDisplayHomeAsUpEnabled(true)
-        supportActionBar!!.setDisplayShowTitleEnabled(true)
+        binding.toolbarSubtitle.text = thread?.tid.toString()
+
         //getSupportActionBar().setTitle(subject);
     }
 
@@ -1443,118 +1456,137 @@ class ThreadActivity : BaseStatusActivity(), OnSmileyPressedInteraction, onFilte
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         var viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value
-        val currentUrl: String
-        currentUrl = if (viewThreadQueryStatus == null) {
+        val currentUrl: String = if (viewThreadQueryStatus == null) {
             URLUtils.getViewThreadUrl(tid, "1")
         } else {
             URLUtils.getViewThreadUrl(tid, viewThreadQueryStatus.page.toString())
         }
         val id = item.itemId
-        if (id == android.R.id.home) {
-            finishAfterTransition()
-            return true
-        } else if (id == R.id.bbs_forum_nav_personal_center) {
-            val intent = Intent(this, UserProfileActivity::class.java)
-            intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
-            intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
-            intent.putExtra("UID", user!!.uid.toString())
-            startActivity(intent)
-            return true
-        } else if (id == R.id.bbs_settings) {
-            val intent = Intent(this, SettingsActivity::class.java)
-            startActivity(intent)
-            return true
-        } else if (id == R.id.bbs_forum_nav_draft_box) {
-            val intent = Intent(this, ThreadDraftActivity::class.java)
-            intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
-            intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
-            startActivity(intent, null)
-            return true
-        } else if (id == R.id.bbs_forum_nav_show_in_webview) {
-            val intent = Intent(this, InternalWebViewActivity::class.java)
-            intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
-            intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
-            intent.putExtra(ConstUtils.PASS_URL_KEY, currentUrl)
-            Log.d(TAG, "Inputted URL $currentUrl")
-            startActivity(intent)
-            return true
-        } else if (id == R.id.bbs_forum_nav_show_in_external_browser) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
-            Log.d(TAG, "Inputted URL $currentUrl")
-            startActivity(intent)
-            return true
-        } else if (id == R.id.bbs_forum_nav_dateline_sort) {
-            val context: Context = this
-            viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value
-            Log.d(TAG, "You press sort btn " + viewThreadQueryStatus!!.datelineAscend)
-            // bbsThreadStatus threadStatus = threadDetailViewModel.threadStatusMutableLiveData.getValue();
-            viewThreadQueryStatus.datelineAscend = !viewThreadQueryStatus.datelineAscend
-            Log.d(TAG, "Changed Ascend mode " + viewThreadQueryStatus.datelineAscend)
-            Log.d(TAG, "Apply Ascend mode " + threadDetailViewModel.threadStatusMutableLiveData.value!!.datelineAscend)
-            reloadThePage(viewThreadQueryStatus)
-            Log.d(TAG, "After reload Ascend mode " + threadDetailViewModel.threadStatusMutableLiveData.value!!.datelineAscend)
-            if (viewThreadQueryStatus.datelineAscend) {
-                Toasty.success(context, getString(R.string.bbs_thread_status_ascend), Toast.LENGTH_SHORT).show()
-            } else {
-                Toasty.success(context, getString(R.string.bbs_thread_status_descend), Toast.LENGTH_SHORT).show()
-            }
-            // reload the parameters
-            Log.d(TAG, "dateline ascend " + viewThreadQueryStatus.datelineAscend)
-            threadDetailViewModel.getThreadDetail(viewThreadQueryStatus)
-            invalidateOptionsMenu()
-            return true
-        } else if (id == R.id.bbs_share) {
-            val result = threadDetailViewModel.threadPostResultMutableLiveData.value
-            if (result != null && result.threadPostVariables != null && result.threadPostVariables.detailedThreadInfo != null) {
-                val detailedThreadInfo = result.threadPostVariables.detailedThreadInfo
-                val sendIntent = Intent()
-                sendIntent.action = Intent.ACTION_SEND
-                sendIntent.putExtra(Intent.EXTRA_TEXT, getString(R.string.share_template,
-                        detailedThreadInfo.subject, currentUrl))
-                sendIntent.type = "text/plain"
-                val shareIntent = Intent.createChooser(sendIntent, null)
-                startActivity(shareIntent)
+        when (id) {
+            android.R.id.home -> {
+                finishAfterTransition()
                 return true
-            } else {
-                Toasty.info(this, getString(R.string.share_not_prepared), Toast.LENGTH_SHORT).show()
             }
-            return true
-        }
-        if (id == R.id.bbs_favorite) {
-            val result = threadDetailViewModel.threadPostResultMutableLiveData.value
-            if (result != null && result.threadPostVariables != null && result.threadPostVariables.detailedThreadInfo != null) {
-                val detailedThreadInfo = result.threadPostVariables.detailedThreadInfo
-                val favoriteThread = detailedThreadInfo.toFavoriteThread(discuz.id, if (user != null) user!!.getUid() else 0)
-                // save it to the database
-                // boolean isFavorite = threadDetailViewModel.isFavoriteThreadMutableLiveData.getValue();
-                val favoriteThreadInDB = threadDetailViewModel.favoriteThreadLiveData.value
-                val isFavorite = favoriteThreadInDB != null
-                if (isFavorite) {
-                    Log.d(TAG, "Get Favroite thread$favoriteThreadInDB")
-                    if (favoriteThreadInDB != null) {
-                        threadDetailViewModel.favoriteThread(favoriteThreadInDB, false,"")
+            R.id.bbs_forum_nav_personal_center -> {
+                val intent = Intent(this, UserProfileActivity::class.java)
+                intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
+                intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
+                intent.putExtra("UID", user!!.uid.toString())
+                startActivity(intent)
+                return true
+            }
+            R.id.bbs_settings -> {
+                val intent = Intent(this, SettingsActivity::class.java)
+                startActivity(intent)
+                return true
+            }
+            R.id.bbs_forum_nav_draft_box -> {
+                val intent = Intent(this, ThreadDraftActivity::class.java)
+                intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
+                intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
+                startActivity(intent, null)
+                return true
+            }
+            R.id.bbs_forum_nav_show_in_webview -> {
+                val intent = Intent(this, InternalWebViewActivity::class.java)
+                intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
+                intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
+                intent.putExtra(ConstUtils.PASS_URL_KEY, currentUrl)
+                Log.d(TAG, "Inputted URL $currentUrl")
+                startActivity(intent)
+                return true
+            }
+            R.id.bbs_forum_nav_show_in_external_browser -> {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
+                Log.d(TAG, "Inputted URL $currentUrl")
+                startActivity(intent)
+                return true
+            }
+            R.id.bbs_forum_nav_dateline_sort -> {
+                val context: Context = this
+                viewThreadQueryStatus = threadDetailViewModel.threadStatusMutableLiveData.value
+                Log.d(TAG, "You press sort btn " + viewThreadQueryStatus!!.datelineAscend)
+                // bbsThreadStatus threadStatus = threadDetailViewModel.threadStatusMutableLiveData.getValue();
+                viewThreadQueryStatus.datelineAscend = !viewThreadQueryStatus.datelineAscend
+                Log.d(TAG, "Changed Ascend mode " + viewThreadQueryStatus.datelineAscend)
+                reloadThePage(viewThreadQueryStatus)
+                Log.d(TAG, "After reload Ascend mode " + threadDetailViewModel.threadStatusMutableLiveData.value!!.datelineAscend)
+                if (viewThreadQueryStatus.datelineAscend) {
+                    Toasty.success(context, getString(R.string.bbs_thread_status_ascend), Toast.LENGTH_SHORT).show()
+                } else {
+                    Toasty.success(context, getString(R.string.bbs_thread_status_descend), Toast.LENGTH_SHORT).show()
+                }
+                // reload the parameters
+                Log.d(TAG, "dateline ascend " + viewThreadQueryStatus.datelineAscend)
+                threadDetailViewModel.getThreadDetail(viewThreadQueryStatus)
+                invalidateOptionsMenu()
+                return true
+            }
+            R.id.bbs_share -> {
+                val result = threadDetailViewModel.threadPostResultMutableLiveData.value
+                if (result != null) {
+                    val detailedThreadInfo = result.threadPostVariables.detailedThreadInfo
+                    val sendIntent = Intent()
+                    sendIntent.action = Intent.ACTION_SEND
+                    sendIntent.putExtra(Intent.EXTRA_TEXT, getString(R.string.share_template,
+                            detailedThreadInfo.subject, currentUrl))
+                    sendIntent.type = "text/plain"
+                    val shareIntent = Intent.createChooser(sendIntent, null)
+                    startActivity(shareIntent)
+                    return true
+                } else {
+                    Toasty.info(this, getString(R.string.share_not_prepared), Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
+            R.id.bbs_favorite -> {
+                val result = threadDetailViewModel.threadPostResultMutableLiveData.value
+                if (result != null) {
+                    val detailedThreadInfo = result.threadPostVariables.detailedThreadInfo
+                    val favoriteThread = detailedThreadInfo.toFavoriteThread(discuz.id, if (user != null) user!!.getUid() else 0)
+                    // save it to the database
+                    // boolean isFavorite = threadDetailViewModel.isFavoriteThreadMutableLiveData.getValue();
+                    val favoriteThreadInDB = threadDetailViewModel.favoriteThreadLiveData.value
+                    val isFavorite = favoriteThreadInDB != null
+                    if (isFavorite) {
+                        Log.d(TAG, "Get Favroite thread$favoriteThreadInDB")
+                        if (favoriteThreadInDB != null) {
+                            threadDetailViewModel.favoriteThread(favoriteThreadInDB, false,"")
+                        }
+                    } else {
+                        Log.d(TAG, "is Favorite $isFavorite")
+                        // open up a dialog
+                        launchFavoriteThreadDialog(favoriteThread)
+                        //new FavoritingThreadAsyncTask(favoriteThread,true).execute();
                     }
                 } else {
-                    Log.d(TAG, "is Favorite $isFavorite")
-                    // open up a dialog
-                    launchFavoriteThreadDialog(favoriteThread)
-                    //new FavoritingThreadAsyncTask(favoriteThread,true).execute();
+                    Toasty.info(this, getString(R.string.favorite_thread_not_prepared), Toast.LENGTH_SHORT).show()
                 }
-            } else {
-                Toasty.info(this, getString(R.string.favorite_thread_not_prepared), Toast.LENGTH_SHORT).show()
             }
-        } else if (id == R.id.bbs_search) {
-            val intent = Intent(this, SearchPostsActivity::class.java)
-            intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
-            intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
-            startActivity(intent)
-            return true
-        } else if (id == R.id.bbs_about_app) {
-            val intent = Intent(this, AboutAppActivity::class.java)
-            startActivity(intent)
-            return true
-        } else {
-            return super.onOptionsItemSelected(item)
+            R.id.bbs_search -> {
+                val intent = Intent(this, SearchPostsActivity::class.java)
+                intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
+                intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
+                startActivity(intent)
+                return true
+            }
+            R.id.bbs_about_app -> {
+                val intent = Intent(this, AboutAppActivity::class.java)
+                startActivity(intent)
+                return true
+            }
+            R.id.paging_view ->{
+                val intent = Intent(this,ThreadPageActivity::class.java)
+                intent.putExtra(ConstUtils.PASS_BBS_ENTITY_KEY, discuz)
+                intent.putExtra(ConstUtils.PASS_BBS_USER_KEY, user)
+                intent.putExtra(ConstUtils.PASS_THREAD_KEY,thread)
+                intent.putExtra(ConstUtils.PASS_FORUM_THREAD_KEY,forum)
+                intent.putExtra(ConstUtils.PASS_PAGE_KEY,1)
+                startActivity(intent)
+            }
+            else -> {
+                return super.onOptionsItemSelected(item)
+            }
         }
         return false
     }
